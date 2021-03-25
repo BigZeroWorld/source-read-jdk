@@ -337,6 +337,9 @@ public class HashMap<K,V> extends AbstractMap<K,V>
      */
     static final int hash(Object key) {
         int h;
+        /* 扰动函数，降低哈希碰撞几率，高半区与低半区做异或，混合原始哈希码的高位与低位，以此来加大低位的随机性，而且混合后的低位参杂了高位的部分特征，这样高位信息也被
+        变相保留下来。哈希桶越小，效果越明显，参考Peter lawley《An introduction to optimising a hashing strategy》的文章，当Mask为9bits，使用扰动函数可以减少10%的碰撞
+        */
         return (key == null) ? 0 : (h = key.hashCode()) ^ (h >>> 16);
     }
 
@@ -624,19 +627,26 @@ public class HashMap<K,V> extends AbstractMap<K,V>
      */
     final V putVal(int hash, K key, V value, boolean onlyIfAbsent,
                    boolean evict) {
+        // tab-哈希桶，p-输入元素对应的哈希桶中节点，n-哈希桶大小，i-输入元素对应的哈希桶索引
         Node<K,V>[] tab; Node<K,V> p; int n, i;
+        // 如果tab没有初始化，则通过resize方法初始化数组
         if ((tab = table) == null || (n = tab.length) == 0)
             n = (tab = resize()).length;
         if ((p = tab[i = (n - 1) & hash]) == null)
+            // 【未出现hash冲突】
             tab[i] = newNode(hash, key, value, null);
         else {
+            // 出现hash冲突
             Node<K,V> e; K k;
+            // 当前节点一样，直接替换
             if (p.hash == hash &&
                 ((k = p.key) == key || (key != null && key.equals(k))))
                 e = p;
+             // 当前哈希桶位置中的节点与输入元素的hash值不一样，遍历该树中的红黑数节点，选择合适位置插入
             else if (p instanceof TreeNode)
                 e = ((TreeNode<K,V>)p).putTreeVal(this, tab, hash, key, value);
             else {
+            // 当前hash桶位置中的节点与输入的值不一样，遍历该位置上的链表节点，选择合适的位置插入
                 for (int binCount = 0; ; ++binCount) {
                     if ((e = p.next) == null) {
                         p.next = newNode(hash, key, value, null);
@@ -659,6 +669,7 @@ public class HashMap<K,V> extends AbstractMap<K,V>
             }
         }
         ++modCount;
+        // 扩容
         if (++size > threshold)
             resize();
         afterNodeInsertion(evict);
@@ -675,32 +686,42 @@ public class HashMap<K,V> extends AbstractMap<K,V>
      * @return the table
      */
     final Node<K,V>[] resize() {
+        // 使用局部变量持有table
         Node<K,V>[] oldTab = table;
         int oldCap = (oldTab == null) ? 0 : oldTab.length;
         int oldThr = threshold;
+        // 新容量，门限值
         int newCap, newThr = 0;
         if (oldCap > 0) {
+            // 如果原容量已经大于等于最大容量，则不在扩容
             if (oldCap >= MAXIMUM_CAPACITY) {
                 threshold = Integer.MAX_VALUE;
                 return oldTab;
             }
+            // 否则，翻倍扩容
             else if ((newCap = oldCap << 1) < MAXIMUM_CAPACITY &&
                      oldCap >= DEFAULT_INITIAL_CAPACITY)
                 newThr = oldThr << 1; // double threshold
         }
+        // 使用门限值初始化容量
         else if (oldThr > 0) // initial capacity was placed in threshold
             newCap = oldThr;
         else {               // zero initial threshold signifies using defaults
+            // 原容量和门限值都是非正数，使用默认缺省值初始化
             newCap = DEFAULT_INITIAL_CAPACITY;
             newThr = (int)(DEFAULT_LOAD_FACTOR * DEFAULT_INITIAL_CAPACITY);
         }
+        // 第一次创建Map会在这里初始化threshold
         if (newThr == 0) {
+            // 初始化新的门限值
             float ft = (float)newCap * loadFactor;
             newThr = (newCap < MAXIMUM_CAPACITY && ft < (float)MAXIMUM_CAPACITY ?
                       (int)ft : Integer.MAX_VALUE);
         }
         threshold = newThr;
+        
         @SuppressWarnings({"rawtypes","unchecked"})
+        // 新建底层数组对象
         Node<K,V>[] newTab = (Node<K,V>[])new Node[newCap];
         table = newTab;
         if (oldTab != null) {
@@ -708,16 +729,28 @@ public class HashMap<K,V> extends AbstractMap<K,V>
                 Node<K,V> e;
                 if ((e = oldTab[j]) != null) {
                     oldTab[j] = null;
+                   
                     if (e.next == null)
+                        // 链表只有一个节点， 直接copy
                         newTab[e.hash & (newCap - 1)] = e;
                     else if (e instanceof TreeNode)
+                        // 如果是Tree结构（链表长度》8时，会将链表转换成Tree，提高HashMap的效率）
                         ((TreeNode<K,V>)e).split(this, newTab, j, oldCap);
                     else { // preserve order
+                        // 链表数据迁移
+                        // 【死链解决】： 采用高低位链表可以解决JDK8之前，链表扩容导致的死链问题。先遍历完链表，最后再放入到哈希桶中对应的位置；
+                        // 而之前是每遍历链表中的一个item就放入到哈希桶中
+                        // 低位链表
                         Node<K,V> loHead = null, loTail = null;
+                        // 高位链表
                         Node<K,V> hiHead = null, hiTail = null;
+                        // 下一个节点的引用
                         Node<K,V> next;
                         do {
                             next = e.next;
+                            // 为0：说明扩容后求余结果不变，为1扩容后再求余就是原索引 + 旧数据的长度（j + oldCap）
+                            // 0: 原位置，对应的是低位链表
+                            // 1： 原位置 + 原数据长度，对应的是高位链表
                             if ((e.hash & oldCap) == 0) {
                                 if (loTail == null)
                                     loHead = e;
@@ -733,10 +766,15 @@ public class HashMap<K,V> extends AbstractMap<K,V>
                                 hiTail = e;
                             }
                         } while ((e = next) != null);
+                        
+                        // 存在低位链表，则链表尾设置为null
+                        // 将链表放到新数组，索引为j
                         if (loTail != null) {
                             loTail.next = null;
                             newTab[j] = loHead;
                         }
+                        // 存在高位链表，则链表尾设置为null
+                        // 将链表放到新数组，索引j
                         if (hiTail != null) {
                             hiTail.next = null;
                             newTab[j + oldCap] = hiHead;
