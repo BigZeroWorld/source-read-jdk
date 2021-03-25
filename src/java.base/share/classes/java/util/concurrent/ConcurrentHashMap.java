@@ -755,8 +755,10 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
      * and so require only release ordering.
      */
 
+    // 通过获取对象的内存地址
     @SuppressWarnings("unchecked")
     static final <K,V> Node<K,V> tabAt(Node<K,V>[] tab, int i) {
+        // 虽然table是volatile，但table中的元素不具备可见性，因此通过unsafe方法来获取指定内存位置的数据，保证每次获取都是最新数据
         return (Node<K,V>)U.getReferenceAcquire(tab, ((long)i << ASHIFT) + ABASE);
     }
 
@@ -772,6 +774,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     /* ---------------- Fields -------------- */
 
     /**
+     * 线程可见
      * The array of bins. Lazily initialized upon first insertion.
      * Size is always a power of two. Accessed directly by iterators.
      */
@@ -1008,18 +1011,24 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
 
     /** Implementation for put and putIfAbsent */
     final V putVal(K key, V value, boolean onlyIfAbsent) {
+        // ConcurrentHashMap中的key和value都不可以为null
         if (key == null || value == null) throw new NullPointerException();
+        
+        // 计算hash值
         int hash = spread(key.hashCode());
         int binCount = 0;
         for (Node<K,V>[] tab = table;;) {
             Node<K,V> f; int n, i, fh; K fk; V fv;
+            // 如果未初始化，则先初始化数组
             if (tab == null || (n = tab.length) == 0)
                 tab = initTable();
             else if ((f = tabAt(tab, i = (n - 1) & hash)) == null) {
+                // 如果目标索引位置没有元素，直接cas
                 if (casTabAt(tab, i, null, new Node<K,V>(hash, key, value)))
                     break;                   // no lock when adding to empty bin
             }
             else if ((fh = f.hash) == MOVED)
+                // 正在扩容
                 tab = helpTransfer(tab, f);
             else if (onlyIfAbsent // check first node without acquiring lock
                      && fh == hash
@@ -1029,6 +1038,8 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
             else {
                 V oldVal = null;
                 synchronized (f) {
+                    // 锁住头节点
+                    // double check, 防止当线程获取到锁之后，进行了扩容操作，元素的位置发生了改变
                     if (tabAt(tab, i) == f) {
                         if (fh >= 0) {
                             binCount = 1;
@@ -1042,6 +1053,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                                         e.val = value;
                                     break;
                                 }
+                                // 遍历链表
                                 Node<K,V> pred = e;
                                 if ((e = e.next) == null) {
                                     pred.next = new Node<K,V>(hash, key, value);
@@ -1050,6 +1062,7 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
                             }
                         }
                         else if (f instanceof TreeBin) {
+                            // 二叉树
                             Node<K,V> p;
                             binCount = 2;
                             if ((p = ((TreeBin<K,V>)f).putTreeVal(hash, key,
@@ -2324,13 +2337,21 @@ public class ConcurrentHashMap<K,V> extends AbstractMap<K,V>
     private final void addCount(long x, int check) {
         CounterCell[] cs; long b, s;
         if ((cs = counterCells) != null ||
+            // 当counterCells为空时，将BaseCount CAS 进行 + x操作
             !U.compareAndSetLong(this, BASECOUNT, b = baseCount, s = b + x)) {
             CounterCell c; long v; int m;
             boolean uncontended = true;
             if (cs == null || (m = cs.length - 1) < 0 ||
+                // 定位counterCel的位置
                 (c = cs[ThreadLocalRandom.getProbe() & m]) == null ||
+                // 获取到counterCell后，通过CAS更新counterCell的值，uncontended表示CAS是否成功
                 !(uncontended =
                   U.compareAndSetLong(c, CELLVALUE, v = c.value, v + x))) {
+                  // 更新对应counterCell的值，包含以下4种情况
+                  // 1. counterCells为空
+                  // 2. counterCells的size为0
+                  // 3. counterCells对应位置上的counterCell为空
+                  // 4. CAS更新counterCells对应位置上的counterCell失败
                 fullAddCount(x, uncontended);
                 return;
             }
